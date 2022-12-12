@@ -17,15 +17,16 @@ class Scenario(BaseScenario):
         world.agents = [Agent() for i in range(num_agents)]
         for i, agent in enumerate(world.agents):
             agent.name = 'agent %d' % i
-            agent.collide = True
+            agent.collide = False #先不考虑避碰
             agent.silent = True
-            agent.size = 0.35 #可改，实际为无人机的SNR覆盖范围
+            agent.size = 0.25 #可改，实际为无人机的SNR覆盖范围
         # add landmarks
         world.landmarks = [Landmark() for i in range(num_landmarks)]
         for i, landmark in enumerate(world.landmarks):
             landmark.name = 'landmark %d' % i
             landmark.collide = False
-            landmark.movable = False
+            landmark.movable = True#默认是false
+            landmark.size=0.02
         # make initial conditions
         self.reset_world(world)
         return world
@@ -42,9 +43,12 @@ class Scenario(BaseScenario):
             agent.state.p_pos = np.random.uniform(-1, +1, world.dim_p)
             agent.state.p_vel = np.zeros(world.dim_p)
             agent.state.c = np.zeros(world.dim_c)
+        #2022-12-12
         for i, landmark in enumerate(world.landmarks):
-            landmark.state.p_pos = np.random.uniform(-1, +1, world.dim_p)
-            landmark.state.p_vel = np.zeros(world.dim_p)
+            landmark.state.p_pos = np.random.uniform(-0.5, +0.5, world.dim_p)
+            #landmark.state.p_vel=np.zeros(world.dim_p)
+            ##2022-12-12改动
+            landmark.state.p_vel = np.random.uniform(-0.05,+0.05,world.dim_p)
 
     def benchmark_data(self, agent, world):
         rew = 0

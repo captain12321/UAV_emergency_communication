@@ -158,7 +158,7 @@ class World(object):
     def integrate_state(self, p_force):
         for i,entity in enumerate(self.entities):
             if not entity.movable: continue
-            entity.state.p_vel = entity.state.p_vel * (1 - self.damping)
+            #entity.state.p_vel = entity.state.p_vel * (1 - self.damping)
             if (p_force[i] is not None):
                 entity.state.p_vel += (p_force[i] / entity.mass) * self.dt
             if entity.max_speed is not None:
