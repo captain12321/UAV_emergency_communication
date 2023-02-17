@@ -3,7 +3,7 @@ import numpy as np
 import tensorflow as tf
 import time
 import pickle
-
+import math
 import maddpg.common.tf_util as U
 from maddpg.trainer.maddpg import MADDPGAgentTrainer
 import tensorflow.contrib.layers as layers
@@ -35,6 +35,8 @@ def parse_args():
     parser.add_argument("--benchmark-dir", type=str, default="C:/Users/HP/Desktop/code_bishe/trainning_datas/benchmark/", help="directory where benchmark data is saved")
     parser.add_argument("--plots-dir", type=str, default="C:/Users/HP/Desktop/code_bishe/trainning_datas/plot/", help="directory where plot data is saved")
     return parser.parse_args()
+
+
 
 #网络
 def mlp_model(input, num_outputs, scope, reuse=False, num_units=64, rnn_cell=None):
@@ -74,11 +76,39 @@ def get_trainers(env, num_adversaries, obs_shape_n, arglist):
             "agent_%d" % i, model, obs_shape_n, env.action_space, i, arglist,
             local_q_func=(arglist.good_policy=='ddpg')))
     return trainers
+ # 2023.2.16
+def cal_total_output(rew):
+    covery_radius = 5661  # calculate using matlab with proper parameters
+    Bk = 1 * 10 ** 6  # total bandwidth
+    h = 100  # height of UAV
+    fc = 2.4 * 10 ** 9
+    N0 = 10 ** (-20)
+    c = 3 * 10 ** 8
+    a = 12.08
+    b = 0.11
+    LOS = 10 ** 0.3
+    NLOS = 10 ** 2.3
+    # 计算当前状态SNR
+    # 1.等比例获得实际距离
+    practical_radius = (rew/0.25) * covery_radius #除以agent_size
+    practical_distance = np.sqrt(h ** 2 + practical_radius ** 2)
+    # print(practical_distance,end="\n")
+    # 2.计算当前位置SNR
+    loss_decay = (4 * math.pi * fc * practical_distance / c) ** 2
+    Plos = 1 / (1 + a * math.exp(-b * (180 / math.pi * math.asin(h / practical_distance) - a)))
+    pass_loss_practical = Plos * LOS * loss_decay + (1 - Plos) * NLOS * loss_decay
+    pass_loss_practical_db = 10 * math.log10(pass_loss_practical)
+    SNR_db = 140 - pass_loss_practical_db
+    SNR = 10 ** (SNR_db / 10)
+    # 3.计算传输速率
+    C = Bk * math.log2(1 + SNR)
+    return C
 
-def train(arglist):
+def train(arglist, transmitted=0):
     with U.single_threaded_session():
         # Create environment
         env = make_env( arglist.benchmark)
+        #print(arglist.benchmark,end="\n")
         # Create agent trainers
         obs_shape_n = [env.observation_space[i].shape for i in range(env.n)]
         num_adversaries = min(env.n, arglist.num_adversaries)
@@ -112,6 +142,7 @@ def train(arglist):
             action_n = [agent.action(obs) for agent, obs in zip(trainers,obs_n)]
             # environment step
             new_obs_n, rew_n, done_n, info_n = env.step(action_n)
+            #print(rew_n,end="\n")
             episode_step += 1
             done = all(done_n)
             terminal = (episode_step >= arglist.max_episode_len)
@@ -121,7 +152,9 @@ def train(arglist):
             obs_n = new_obs_n
 
             for i, rew in enumerate(rew_n):
-                episode_rewards[-1] += rew
+                #2023-01-08
+                if i==0: #只加一遍传输总值
+                    episode_rewards[-1] += rew #最后一位加上值
                 agent_rewards[i][-1] += rew
 
             if done or terminal:
@@ -131,9 +164,24 @@ def train(arglist):
                 for a in agent_rewards:
                     a.append(0)
                 agent_info.append([[]])
-
+                # 2023-2-17 save_rate个迭代后计算总传输量,算后100个iteration的均值
+                if len(episode_rewards)>1000 and len(episode_rewards) % arglist.save_rate ==100:
+                    print("episodes:{},total transmission:{:.2f}KB".format(len(episode_rewards)-100, (transmitted/100)/(8*1000)))
+                    transmitted=0
+            #print(episode_rewards,end="\n")
             # increment global step counter
             train_step += 1
+
+
+            # 2023-2-17，每save_rate个迭代后获取当前的状态，得到该episode所获得的传输量总值
+            if len(episode_rewards)>=1000 and len(episode_rewards) % arglist.save_rate <100:
+                for l in env.world.landmarks:
+                    dists = [np.sqrt(np.sum(np.square(a.state.p_pos - l.state.p_pos))) for a in
+                             env.world.agents]  # 1*agent_size list
+                    for i in range(len(dists)):
+                        if dists[i] < 0.25: #agent_size current 0.25
+                            # 2023-2-17
+                            transmitted+=cal_total_output(dists[i])
 
             # for benchmarking learned policies (if benchmark sets true)
             if arglist.benchmark:
@@ -149,13 +197,13 @@ def train(arglist):
 
             # for displaying learned policies (if display sets true, and only display 1000 iterations
             if arglist.display:
-                if(len(episode_rewards)<2500):
-                    pass
-                else:
-                    if len(episode_rewards)%100==0:
-                        time.sleep(0.1)
-                        env.render()
-                        continue
+                # if(len(episode_rewards)<4000):
+                #     pass
+                # else:
+                if len(episode_rewards)%10==0:
+                    time.sleep(0.1)
+                    env.render()
+                    continue
 
 
             # update all trainers, if not in display or benchmark mode
@@ -165,12 +213,17 @@ def train(arglist):
             for agent in trainers:
                 loss = agent.update(trainers, train_step)
 
+
+
             # save model, display training output
             if terminal and (len(episode_rewards) % arglist.save_rate == 0):
                 U.save_state(arglist.save_dir, saver=saver)
+
+
                 # print statement depends on whether or not there are adversaries
                 if num_adversaries == 0:
-                    print("steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(
+                    #modified on 2023-2-17
+                    print("steps: {}, episodes: {}, mean episode reward: {},time: {}".format(
                         train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]), round(time.time()-t_start, 3)))
                 else:
                     print("steps: {}, episodes: {}, mean episode reward: {}, agent episode reward: {}, time: {}".format(

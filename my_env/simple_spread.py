@@ -1,7 +1,7 @@
 import numpy as np
 from core import World, Agent, Landmark
 from scenario import BaseScenario
-
+import math
 
 class Scenario(BaseScenario):
     def make_world(self):
@@ -75,12 +75,24 @@ class Scenario(BaseScenario):
         dist_min = agent1.size + agent2.size
         return True if dist < dist_min else False
 
+
+
     def reward(self, agent, world):
         # Agents are rewarded based on minimum agent distance to each landmark, penalized for collisions
         rew = 0
+        #print(world.landmarks, end="\n")
         for l in world.landmarks:
-            dists = [np.sqrt(np.sum(np.square(a.state.p_pos - l.state.p_pos))) for a in world.agents]
-            rew -= min(dists)
+            dists = [np.sqrt(np.sum(np.square(a.state.p_pos - l.state.p_pos))) for a in world.agents] #1*agent_size list
+            #print(dists,end="\n")
+            #2023-2-16
+            for i in range(len(dists)):
+                if dists[i] < agent.size:
+                    #2023-2-16
+                    rew+= agent.size-dists[i]
+                else:
+                    rew+=0
+        #print("done")
+           #rew -= min(dists)
         if agent.collide:
             for a in world.agents:
                 if self.is_collision(a, agent):
